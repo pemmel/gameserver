@@ -6,16 +6,11 @@ import (
 )
 
 const (
-	mmStride int = 20
-
+	mmWaitInterval        = time.Second
+	mmBorrowStride    int = 10
 	mmTeamSize        int = 2
 	mmPlayerPerTeam   int = 5
 	mmTotalPlayerSize int = mmTeamSize * mmPlayerPerTeam
-
-	mmMaxWaitTime        = 5 * time.Second
-	mmMinWaitTime        = 1 * time.Second
-	mmLowQueueCount  int = 10
-	mmHighQueueCount int = 50
 )
 
 var (
@@ -30,29 +25,9 @@ func init() {
 
 func matchmaking() {
 	for {
-		m := 0
-		n := 0
-		a := 0
-		for mi := 1; mi != 0; {
-			mi, a = findmatch()
-			m += mi
-			n += a
-		}
-		fmt.Printf("Lobbies Matched: %d | Queue Borrowed: %d | Queue Available: %d\n", m, n, a)
-		time.Sleep(time.Second)
-	}
-}
-
-func waitTimeDuration(cnt int) time.Duration {
-	switch {
-	case cnt <= mmLowQueueCount:
-		return mmMaxWaitTime
-	case cnt >= mmHighQueueCount:
-		return mmMinWaitTime
-	default:
-		waitFraction := float64(cnt-mmLowQueueCount) / float64(mmHighQueueCount-mmLowQueueCount)
-		waitDuration := float64(mmMaxWaitTime-mmMinWaitTime) * waitFraction
-		return mmMinWaitTime + time.Duration(waitDuration)
+		m, b := findmatch()
+		fmt.Printf("Lobbies Matched: %d | Queue Borrowed: %d | Queue Available: %d\n", m, b, b-m)
+		time.Sleep(mmWaitInterval)
 	}
 }
 
@@ -67,62 +42,75 @@ func waitTimeDuration(cnt int) time.Duration {
 //
 // Returns:
 //
-//	m: The count of how many lobbies are merged to form matches.
-//	n: The amount of borrowed lobby queues.
-func findmatch() (m int, n int) {
-	var mrg [mmTotalPlayerSize]int              // Stores merged lobby for matchmaking
-	var buf [1 + mmStride]*LlistNode[LobbyRoom] // Buffer for storing borrowed lobby
-
-	r := buf[0:1]
-	r[0] = &LlistNode[LobbyRoom]{next: nil}
+//	mn: The count of how many lobbies are merged to form matches.
+//	bn: The amount of borrowed lobby queues.
+func findmatch() (mn int, bn int) {
+	const bcap = 3 * mmBorrowStride
+	var mrg [mmTotalPlayerSize]int      // Stores merged lobby for matchmaking
+	var buf [bcap]*LlistNode[LobbyRoom] // Buffer for storing borrowed lobby
 
 	// Matchmaking process.
-	// Loop until a match is found or no more lobbies are available
-	for m == 0 {
+	// Loop until match cannot be found.
+	r := buf[:0]
+	for {
 		// Ensure buffer capacity is sufficient to store borrowed lobby queues
-		if cap(r) < 1+n+mmStride {
-			t := make([]*LlistNode[LobbyRoom], 1+n+mmStride)
+		if cap(r) < len(r)+mmBorrowStride {
+			t := make([]*LlistNode[LobbyRoom], len(r)+mmBorrowStride)
 			copy(t, r)
-			r = t
+			r = t[:len(r)]
 		}
 		// Borrow lobby queues from the queue manager
 		// Return unused borrowed lobby queues if matchmaking is unsuccessful
-		w := r[1+n : 1+n]
-		g := mmQueue.Borrow(mmStride, &w)
-		if g == 0 {
-			if n != 0 {
-				head := r[0].next
-				tail := r[n]
+		w := r[len(r):]
+		b := mmQueue.Borrow(mmBorrowStride, &w)
+		if b == 0 {
+			if len(r) != 0 {
+				head := r[0]
+				tail := r[len(r)-1]
 				mmQueue.Return(head, tail)
 			}
 			return
 		}
-		// Link borrowed lobby queues to the buffer
-		r[n].next = w[0]
-		n += g
-		r = r[:1+n]
-		// Determine potential matches and merge lobbies if possible
-		c := combinations(r[1:])
-		m = mergeUnique(c, &mrg)
-	}
-
-	// Remove unused lobbies from the list by rechaining
-	for _, i := range mrg[:m] {
-		node := r[i+1]
-		r[i].next = node.next
-		r[i+1] = r[i]
-	}
-
-	// Return unused borrowed lobby queues after rechaining
-	head := r[0].next
-	for tail := head; tail != nil; tail = tail.next {
-		if tail.next == nil {
-			mmQueue.Return(head, tail)
-			break
+		if len(r) != 0 {
+			r[len(r)-1].next = w[0]
+		}
+		r = r[:len(r)+b]
+		bn += b
+		// we try matching all of the borrowed lobbies to form a match.
+		// If no lobbies can be paired, try borrowing another lobby.
+	matching:
+		c := combinations(r)
+		m := mergeUnique(c, &mrg)
+		if m == 0 {
+			continue
+		}
+		mn += m
+		// Remove unused lobbies from the list by rechaining
+		l := make([]LobbyRoom, m)
+		for i, j := range mrg[:m] {
+			l[i] = r[j].Value
+			r[j] = nil
+		}
+		_ = NewMatchConfig(l)
+		// Update the r buffer with latest structure
+		x := r[:0]
+		p := &LlistNode[LobbyRoom]{next: nil}
+		for _, n := range r {
+			if n != nil {
+				x = append(x, n)
+				p.next = n
+				p = n
+			}
+		}
+		p.next = nil // p is now the tail. tail.next should be nil
+		r = x
+		// There's chance that we can still find another match.
+		// Thus we go calculate the possibility again without the
+		// needs borrow from the queue manager.
+		if len(r) >= 4 {
+			goto matching
 		}
 	}
-
-	return
 }
 
 func combinations(a []*LlistNode[LobbyRoom]) [][]int {
@@ -153,14 +141,13 @@ func backtrack(a []*LlistNode[LobbyRoom], start, sum int, current []int, result 
 }
 
 func mergeUnique[T comparable](result [][]T, r *[mmTotalPlayerSize]T) int {
-	var a1 [mmPlayerPerTeam]T
 	for i := 0; i < len(result); i++ {
-		n := copy(a1[:], result[i])
+		a1 := result[i]
 		for j := i + 1; j < len(result); j++ {
 			a2 := result[j]
-			if compareUnique(a2, a1[:n]) {
+			if compareUnique(a2, a1) {
 				w := (*r)[:0]
-				w = append(w, a1[:n]...)
+				w = append(w, a1...)
 				w = append(w, a2...)
 				return len(w)
 			}

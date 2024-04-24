@@ -15,6 +15,14 @@ func (r *LobbyRoom) PlayerCount() int {
 	return 1 + len(r.Guests)
 }
 
+func (r *LobbyRoom) PlayerSidx(b []uint32) []uint32 {
+	b = append(b, r.HostSidx)
+	for _, g := range r.Guests {
+		b = append(b, g.Sidx)
+	}
+	return b
+}
+
 type LobbyGuest struct {
 	Ready         bool
 	Sidx          uint32
@@ -89,7 +97,6 @@ func lobbyKickPlayer(sidx, targetSidx uint32) {}
 
 type PlayerConfig struct {
 	Sidx            uint32
-	PemmelId        uint32
 	TeamSide        uint8
 	SkinId          uint16
 	SpawnEffectId   uint16
@@ -103,9 +110,31 @@ type MatchConfig struct {
 	Id             uint32
 	SunSideSkinId  uint16
 	MoonSideSkinId uint16
-	PlayerConfigs  [10]PlayerConfig
+	PlayerConfigs  [mmTotalPlayerSize]PlayerConfig
+	ConfigTime     time.Time
 	Begin          time.Time
 	End            time.Time
+}
+
+func NewMatchConfig(r []LobbyRoom) MatchConfig {
+	c := 0
+	pc := [mmTotalPlayerSize]PlayerConfig{}
+	for _, l := range r {
+		var bsidx [mmPlayerPerTeam]uint32
+		s := l.PlayerSidx(bsidx[:0])
+		t := uint8(c / 5)
+		for _, sidx := range s {
+			pc[c].Sidx = sidx
+			pc[c].TeamSide = t
+			c++
+		}
+	}
+	return MatchConfig{
+		Mode:          r[0].Mode,
+		Id:            0,
+		PlayerConfigs: pc,
+		ConfigTime:    time.Now(),
+	}
 }
 
 // list of standby lobby

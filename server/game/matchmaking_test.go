@@ -25,16 +25,18 @@ import (
 	"time"
 
 	"github.com/bytedance/gopkg/lang/fastrand"
+	"github.com/pemmel/gameserver/server"
 )
 
 func TestMatchmaking(t *testing.T) {
-	a := []int{1, 2, 2, 3, 4, 4}
+	a := []int{1, 2, 2, 3, 4}
 	for i, v := range a {
 		r := LobbyRoom{
 			Idx:      uint32(i),
-			HostSidx: uint32(v),
+			HostSidx: uint32(0),
 			Guests:   make([]LobbyGuest, v-1),
 		}
+		server.SharedSession().NewSession(server.NewSessionV1, 0)
 		mmQueue.Insert(r)
 	}
 	findmatch()

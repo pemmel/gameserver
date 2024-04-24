@@ -47,6 +47,7 @@ func (h *LlistHead[T]) Return(head, tail *LlistNode[T]) {
 	if h.tail == nil {
 		h.next = head
 		h.tail = tail
+		h.tail.next = nil
 	} else {
 		tail.next = h.next
 		h.next = head
