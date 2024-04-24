@@ -1,0 +1,10 @@
+syntax = "proto3";
+
+package protobuf;
+
+option go_package = "./protobuf";
+
+message AuthResponseLoginSuccess {
+  uint32 sidx = 1;
+  bytes aes256key = 2;
+}

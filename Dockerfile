@@ -6,5 +6,8 @@ RUN GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -a -installsuffix cgo -o /bui
 
 FROM scratch
 COPY --from=builder /build/bin/app /bin/app
-EXPOSE 8181/udp
+ADD ca-cert.pem /bin/app
+ADD ca-key.pem /bin/app
+EXPOSE 5432/udp
+EXPOSE 4433/tcp
 CMD ["./bin/app"]
